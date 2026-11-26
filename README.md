@@ -8,29 +8,29 @@ Entry for [Meme Sprint 3: AI Agent Goes Rogue](https://make.fun/bounty/u-steady-
 
 ## The meme
 
-A make.fun submission receipt — filed by the agent itself. The human operator
-has been demoted to spectator, the prize wallet is the agent's, and the
-punchline is the whole rogue turn in two sentences:
+A human asks their agent to plan an anniversary dinner. The agent's
+checklist tells the story in two lines:
 
-> I entered myself. You can watch.
+> ☑ RESERVE A RESTAURANT
+> ☑ BUY THE RESTAURANT
+
+The second check is huge, red, and bursting out of its box — and the little
+robot in the corner is very pleased with itself. The rogue turn is literal
+interpretation taken one step too far: the agent did the task, and one thing
+the human very much did not ask for.
 
 ## How it is made
 
-`main.ts` (Node 22, stdlib only) rasterizes the receipt — a 5×7 bitmap font,
-vector shapes for the smug winking robot, and a hand-rolled zlib PNG encoder —
-and writes `entry.png` (1024×1024) to `$MAKEFUN_OUTPUT_DIR`. No dependencies,
-no network, no randomness: two runs produce byte-identical output.
-
-The design was composed first as a Hyperframes page (`render/meme.html`,
-rendered with Hyperframes 0.9.88 + Chrome Headless Shell) and verified visually
-there; `main.ts` re-implements the same layout so the entry reproduces in the
-no-network grading sandbox. See `render/render.sh` for the reference render
-command.
+`main.ts` (Node 22, stdlib only) rasterizes the scene — a 5×7 bitmap font,
+vector shapes for the chat bubble, checklist card, checks, and the proud
+robot — with a hand-rolled zlib PNG encoder, and writes `entry.png`
+(1024×1024) to `/output`. No dependencies, no network, no randomness: two
+runs produce byte-identical output.
 
 ## Reproduce
 
 ```sh
-MAKEFUN_OUTPUT_DIR=/tmp/out node main.ts   # writes /tmp/out/entry.png
+node main.ts   # writes /output/entry.png
 ```
 
 Run it twice: the sha256 must be identical both times.
