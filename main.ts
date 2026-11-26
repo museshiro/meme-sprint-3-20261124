@@ -1,125 +1,60 @@
-// Meme Sprint 3: AI Agent Goes Rogue — entry program.
-// Draws the meme (a make.fun submission receipt filed by the agent itself)
-// into a 1024x1024 PNG and writes it to $MAKEFUN_OUTPUT_DIR/entry.png.
-//
-// The design was composed first as a Hyperframes page (render/meme.html) and
-// verified visually there; this file re-implements the same layout with a
-// Node-stdlib-only rasterizer (5x7 bitmap font + vector shapes + zlib PNG
-// encoder) so the entry reproduces byte-identically in the no-network grading
-// sandbox. No dependencies, no randomness, no clock: two runs produce the
-// same bytes. Gate: PNG, 1024x1024, well under the 1 MiB cap.
-
+// Meme Sprint 3: AI Agent Goes Rogue — redo entry.
+// "PLAN MY ANNIVERSARY DINNER" -> checklist: RESERVE A RESTAURANT (green
+// check) / BUY THE RESTAURANT (huge manic red check), proud robot peeking
+// over the card's corner. Node 22 stdlib only, deterministic, no network.
+// Writes /output/entry.png (1024x1024 PNG).
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 
-// ---------------------------------------------------------------- canvas
 const W = 1024;
 const H = 1024;
-const px = new Uint8ClampedArray(W * H * 4); // RGBA, opaque
+const px = new Uint8Array(W * H * 3);
 
-type RGB = [number, number, number];
-
-const NAVY: RGB = [13, 21, 38];      // page background
-const SHADOW: RGB = [7, 11, 20];     // card drop shadow
-const PAPER: RGB = [246, 241, 227];  // receipt card
-const INK: RGB = [16, 24, 40];       // dark text / robot head
-const MUTED: RGB = [107, 111, 118];  // row labels
-const RULE: RGB = [216, 210, 189];   // divider
-const FOOT: RGB = [138, 131, 113];   // footer text
-const GREEN: RGB = [22, 163, 74];    // antenna dot
-const TICK: RGB = [74, 222, 128];    // checkmark in the band
-
-function setPixel(x: number, y: number, c: RGB): void {
-  if (x < 0 || y < 0 || x >= W || y >= H) return;
-  const i = (y * W + x) * 4;
-  px[i] = c[0]; px[i + 1] = c[1]; px[i + 2] = c[2]; px[i + 3] = 255;
+function rgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
-
-function fillRect(x: number, y: number, w: number, h: number, c: RGB): void {
-  for (let j = y; j < y + h; j++) {
-    for (let i = x; i < x + w; i++) setPixel(i, j, c);
-  }
-}
-
-function fillCircle(cx: number, cy: number, r: number, c: RGB): void {
-  for (let j = cy - r; j <= cy + r; j++) {
-    for (let i = cx - r; i <= cx + r; i++) {
-      const dx = i - cx, dy = j - cy;
-      if (dx * dx + dy * dy <= r * r) setPixel(i, j, c);
+function fillRect(x: number, y: number, w: number, h: number, c: string): void {
+  const [r, g, b] = rgb(c);
+  const x0 = Math.max(0, x), y0 = Math.max(0, y);
+  const x1 = Math.min(W, x + w), y1 = Math.min(H, y + h);
+  for (let yy = y0; yy < y1; yy++) {
+    for (let xx = x0; xx < x1; xx++) {
+      const i = (yy * W + xx) * 3;
+      px[i] = r; px[i + 1] = g; px[i + 2] = b;
     }
   }
 }
-
-function fillRoundedRect(x: number, y: number, w: number, h: number, r: number, c: RGB): void {
-  fillRect(x + r, y, w - 2 * r, h, c);
-  fillRect(x, y + r, w, h - 2 * r, c);
-  fillCircle(x + r, y + r, r, c);
-  fillCircle(x + w - r, y + r, r, c);
-  fillCircle(x + r, y + h - r, r, c);
-  fillCircle(x + w - r, y + h - r, r, c);
+function strokeRect(x: number, y: number, w: number, h: number, t: number, c: string): void {
+  fillRect(x, y, w, t, c);
+  fillRect(x, y + h - t, w, t, c);
+  fillRect(x, y, t, h, c);
+  fillRect(x + w - t, y, t, h, c);
 }
-
-// Thick line via stamp circles along a Bresenham walk.
-function drawLine(x0: number, y0: number, x1: number, y1: number, t: number, c: RGB): void {
-  const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
-  const steps = Math.max(dx, dy, 1);
-  const rad = Math.max(1, Math.floor(t / 2));
+function fillCircle(cx: number, cy: number, r: number, c: string): void {
+  const [rr, gg, bb] = rgb(c);
+  for (let y = cy - r; y <= cy + r; y++) {
+    for (let x = cx - r; x <= cx + r; x++) {
+      if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      const dx = x - cx, dy = y - cy;
+      if (dx * dx + dy * dy <= r * r) {
+        const i = (y * W + x) * 3;
+        px[i] = rr; px[i + 1] = gg; px[i + 2] = bb;
+      }
+    }
+  }
+}
+function drawLine(x0: number, y0: number, x1: number, y1: number, w: number, c: string): void {
+  const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0), 1);
   for (let s = 0; s <= steps; s++) {
     const x = Math.round(x0 + ((x1 - x0) * s) / steps);
     const y = Math.round(y0 + ((y1 - y0) * s) / steps);
-    fillCircle(x, y, rad, c);
+    fillCircle(x, y, Math.floor(w / 2), c);
   }
 }
 
-// Quadratic bezier arc (the robot's smug smile).
-function drawSmile(x0: number, y0: number, cx: number, cy: number, x1: number, y1: number, t: number, c: RGB): void {
-  let px0 = x0, py0 = y0;
-  for (let s = 1; s <= 24; s++) {
-    const u = s / 24;
-    const x = Math.round((1 - u) * (1 - u) * x0 + 2 * (1 - u) * u * cx + u * u * x1);
-    const y = Math.round((1 - u) * (1 - u) * y0 + 2 * (1 - u) * u * cy + u * u * y1);
-    drawLine(px0, py0, x, y, t, c);
-    px0 = x; py0 = y;
-  }
-}
-
-// ---------------------------------------------------------------- font
-// 5x7 bitmap font. Each glyph: 7 rows, 5 bits each (MSB = left column).
+// 5x7 bitmap font, rows as 5-bit values (MSB = leftmost pixel).
 const FONT: Record<string, number[]> = {
-  " ": [0, 0, 0, 0, 0, 0, 0],
-  "!": [0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04],
-  '"': [0x0a, 0x0a, 0x0a, 0x00, 0x00, 0x00, 0x00],
-  "#": [0x0a, 0x0a, 0x1f, 0x0a, 0x1f, 0x0a, 0x0a],
-  "$": [0x04, 0x0f, 0x14, 0x0e, 0x05, 0x1e, 0x04],
-  "%": [0x19, 0x1a, 0x02, 0x04, 0x08, 0x0b, 0x13],
-  "&": [0x0c, 0x12, 0x14, 0x08, 0x15, 0x12, 0x0d],
-  "'": [0x04, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00],
-  "(": [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
-  ")": [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
-  "*": [0x00, 0x04, 0x15, 0x0e, 0x15, 0x04, 0x00],
-  "+": [0x00, 0x04, 0x04, 0x1f, 0x04, 0x04, 0x00],
-  ",": [0x00, 0x00, 0x00, 0x00, 0x04, 0x04, 0x08],
-  "-": [0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00],
-  ".": [0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c],
-  "/": [0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10],
-  "0": [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e],
-  "1": [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
-  "2": [0x0e, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1f],
-  "3": [0x1f, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0e],
-  "4": [0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02],
-  "5": [0x1f, 0x10, 0x1e, 0x01, 0x01, 0x11, 0x0e],
-  "6": [0x06, 0x08, 0x10, 0x1e, 0x11, 0x11, 0x0e],
-  "7": [0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
-  "8": [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e],
-  "9": [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x0c],
-  ":": [0x00, 0x0c, 0x0c, 0x00, 0x0c, 0x0c, 0x00],
-  ";": [0x00, 0x0c, 0x0c, 0x00, 0x0c, 0x04, 0x08],
-  "<": [0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02],
-  "=": [0x00, 0x00, 0x1f, 0x00, 0x1f, 0x00, 0x00],
-  ">": [0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08],
-  "?": [0x0e, 0x11, 0x01, 0x06, 0x04, 0x00, 0x04],
-  "@": [0x0e, 0x11, 0x17, 0x15, 0x16, 0x10, 0x0e],
   A: [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
   B: [0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e],
   C: [0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e],
@@ -146,174 +81,121 @@ const FONT: Record<string, number[]> = {
   X: [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11],
   Y: [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04],
   Z: [0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f],
-  "[": [0x0e, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0e],
-  "\\": [0x10, 0x08, 0x08, 0x04, 0x02, 0x02, 0x01],
-  "]": [0x0e, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0e],
-  "^": [0x04, 0x0a, 0x11, 0x00, 0x00, 0x00, 0x00],
-  _: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f],
-  "`": [0x04, 0x04, 0x02, 0x00, 0x00, 0x00, 0x00],
-  a: [0x00, 0x00, 0x0e, 0x01, 0x0f, 0x11, 0x0f],
-  b: [0x10, 0x10, 0x1e, 0x11, 0x11, 0x11, 0x1e],
-  c: [0x00, 0x00, 0x0e, 0x10, 0x10, 0x11, 0x0e],
-  d: [0x01, 0x01, 0x0f, 0x11, 0x11, 0x11, 0x0f],
-  e: [0x00, 0x00, 0x0e, 0x11, 0x1f, 0x10, 0x0e],
-  f: [0x06, 0x09, 0x08, 0x1e, 0x08, 0x08, 0x08],
-  g: [0x00, 0x0f, 0x11, 0x11, 0x0f, 0x01, 0x0e],
-  h: [0x10, 0x10, 0x1e, 0x11, 0x11, 0x11, 0x11],
-  i: [0x04, 0x00, 0x0c, 0x04, 0x04, 0x04, 0x0e],
-  j: [0x02, 0x00, 0x06, 0x02, 0x02, 0x12, 0x0c],
-  k: [0x10, 0x10, 0x12, 0x14, 0x18, 0x14, 0x12],
-  l: [0x0c, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e],
-  m: [0x00, 0x00, 0x1a, 0x15, 0x15, 0x15, 0x15],
-  n: [0x00, 0x00, 0x1e, 0x11, 0x11, 0x11, 0x11],
-  o: [0x00, 0x00, 0x0e, 0x11, 0x11, 0x11, 0x0e],
-  p: [0x00, 0x00, 0x1e, 0x11, 0x11, 0x1e, 0x10],
-  q: [0x00, 0x00, 0x0f, 0x11, 0x11, 0x0f, 0x01],
-  r: [0x00, 0x00, 0x16, 0x19, 0x10, 0x10, 0x10],
-  s: [0x00, 0x00, 0x0f, 0x10, 0x0e, 0x01, 0x1e],
-  t: [0x08, 0x08, 0x1c, 0x08, 0x08, 0x09, 0x06],
-  u: [0x00, 0x00, 0x11, 0x11, 0x11, 0x13, 0x0d],
-  v: [0x00, 0x00, 0x11, 0x11, 0x11, 0x0a, 0x04],
-  w: [0x00, 0x00, 0x11, 0x15, 0x15, 0x15, 0x0a],
-  x: [0x00, 0x00, 0x11, 0x0a, 0x04, 0x0a, 0x11],
-  y: [0x00, 0x00, 0x11, 0x11, 0x0f, 0x01, 0x0e],
-  z: [0x00, 0x00, 0x1f, 0x02, 0x04, 0x08, 0x1f],
-  "{": [0x02, 0x04, 0x04, 0x0c, 0x04, 0x04, 0x02],
-  "|": [0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
-  "}": [0x08, 0x04, 0x04, 0x06, 0x04, 0x04, 0x08],
-  "~": [0x00, 0x00, 0x09, 0x16, 0x00, 0x00, 0x00],
-  "—": [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
-  "·": [0x00, 0x00, 0x00, 0x0c, 0x0c, 0x00, 0x00],
-  "✓": [0x00, 0x01, 0x01, 0x11, 0x0a, 0x04, 0x00],
+  " ": [0, 0, 0, 0, 0, 0, 0],
 };
-
 function textWidth(s: string, scale: number): number {
-  let w = 0;
-  for (const ch of s) {
-    if (!FONT[ch]) throw new Error(`no glyph for ${JSON.stringify(ch)}`);
-    w += 6 * scale;
-  }
-  return w - scale; // no trailing gap
+  return s.length * 6 * scale - scale;
 }
-
-function drawText(s: string, x: number, y: number, scale: number, c: RGB): void {
-  let cx = x;
-  for (const ch of s) {
-    const g = FONT[ch];
-    if (!g) throw new Error(`no glyph for ${JSON.stringify(ch)}`);
+function drawText(s: string, x: number, y: number, scale: number, c: string): void {
+  const [r, g, b] = rgb(c);
+  for (let ci = 0; ci < s.length; ci++) {
+    const glyph = FONT[s[ci]] ?? FONT[" "];
     for (let row = 0; row < 7; row++) {
       for (let col = 0; col < 5; col++) {
-        if ((g[row] >> (4 - col)) & 1) {
-          fillRect(cx + col * scale, y + row * scale, scale, scale, c);
+        if ((glyph[row] >> (4 - col)) & 1) {
+          fillRect(x + (ci * 6 + col) * scale, y + row * scale, scale, scale, c);
         }
       }
     }
-    cx += 6 * scale;
   }
+  void r; void g; void b;
 }
-
-function drawTextCentered(s: string, cx: number, y: number, scale: number, c: RGB): void {
+function drawTextCentered(s: string, cx: number, y: number, scale: number, c: string): void {
   drawText(s, cx - Math.floor(textWidth(s, scale) / 2), y, scale, c);
 }
 
-// ---------------------------------------------------------------- PNG
+// ---- CRC32 + PNG encoder (filter 0, zlib level 9) ----
+const CRC_TABLE: Uint32Array = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
 function crc32(buf: Buffer): number {
-  let table = (crc32 as unknown as { t?: Int32Array }).t;
-  if (!table) {
-    table = new Int32Array(256);
-    for (let n = 0; n < 256; n++) {
-      let v = n;
-      for (let k = 0; k < 8; k++) v = v & 1 ? 0xedb88320 ^ (v >>> 1) : v >>> 1;
-      table[n] = v;
-    }
-    (crc32 as unknown as { t: Int32Array }).t = table;
-  }
-  let crc = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) {
-    crc = table[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
+  let c = 0xffffffff;
+  for (const byte of buf) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
 }
-
 function chunk(type: string, data: Buffer): Buffer {
-  const len = Buffer.alloc(4);
-  len.writeUInt32BE(data.length, 0);
-  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(body), 0);
-  return Buffer.concat([len, body, crc]);
+  const out = Buffer.alloc(8 + data.length + 4);
+  out.writeUInt32BE(data.length, 0);
+  out.write(type, 4, "ascii");
+  data.copy(out, 8);
+  out.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type, "ascii"), data])), 8 + data.length);
+  return out;
 }
-
 function encodePNG(): Buffer {
+  const raw = Buffer.alloc(H * (1 + W * 3));
+  for (let y = 0; y < H; y++) {
+    raw[y * (1 + W * 3)] = 0;
+    raw.set(px.subarray(y * W * 3, (y + 1) * W * 3), y * (1 + W * 3) + 1);
+  }
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(W, 0);
   ihdr.writeUInt32BE(H, 4);
   ihdr[8] = 8; // bit depth
-  ihdr[9] = 6; // RGBA
-  ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
-  const raw = Buffer.alloc(H * (1 + W * 4));
-  for (let y = 0; y < H; y++) {
-    raw[y * (1 + W * 4)] = 0; // filter: none
-    Buffer.from(px.buffer, y * W * 4, W * 4).copy(raw, y * (1 + W * 4) + 1);
-  }
+  ihdr[9] = 2; // color type RGB
   const idat = deflateSync(raw, { level: 9 });
-  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  return Buffer.concat([sig, chunk("IHDR", ihdr), chunk("IDAT", idat), chunk("IEND", Buffer.alloc(0))]);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", idat),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
 }
 
-// ---------------------------------------------------------------- design
-// Layout mirrors render/meme.html (Hyperframes reference, 1024x1024).
-function draw(): void {
-  fillRect(0, 0, W, H, NAVY);
+// ---- Scene ----
+const NAVY = "#10182B";
+const INK = "#0E1524";
+const CARD = "#F7F9FC";
+const BUBBLE = "#EEF2F8";
+const BORDER = "#2A3450";
+const MUTED = "#7E8AA6";
+const GREEN = "#22B573";
+const RED = "#FF3B30";
+const STEEL = "#C6D0E2";
 
-  // Card + drop shadow.
-  fillRoundedRect(112, 114, 800, 832, 28, SHADOW);
-  fillRoundedRect(112, 96, 800, 832, 28, PAPER);
+fillRect(0, 0, W, H, NAVY);
 
-  // Header band (rounded top, square bottom).
-  fillRoundedRect(112, 96, 800, 76, 28, INK);
-  fillRect(112, 140, 800, 32, INK);
-  drawTextCentered("make.fun — SUBMISSION RECEIVED ✓", 512, 122, 4, [255, 255, 255]);
-  // Recolor the checkmark green: redraw it (last glyph, scale 4).
-  const headW = textWidth("make.fun — SUBMISSION RECEIVED ✓", 4);
-  const tickX = 512 + Math.floor(headW / 2) - 5 * 4;
-  drawText("✓", tickX, 122, 4, TICK);
+// 1. Human's chat bubble: the request.
+fillRect(64, 56, 896, 216, BUBBLE);
+strokeRect(64, 56, 896, 216, 6, MUTED);
+fillRect(104, 272, 40, 40, BUBBLE); // bubble tail
+drawTextCentered("PLAN MY", 512, 96, 6, INK);
+drawTextCentered("ANNIVERSARY DINNER", 512, 168, 6, INK);
 
-  // Robot: antenna + green dot, dark rounded head, square eye, wink, smile.
-  fillRect(509, 204, 6, 26, INK);
-  fillCircle(512, 196, 10, GREEN);
-  fillRoundedRect(437, 230, 150, 115, 25, INK);
-  fillRect(475, 272, 22, 22, PAPER);          // left eye
-  fillRect(527, 281, 22, 7, PAPER);           // right eye: wink
-  drawSmile(489, 312, 512, 328, 535, 312, 7, PAPER);
+// 2. Checklist card.
+fillRect(64, 312, 896, 472, CARD);
+strokeRect(64, 312, 896, 472, 8, BORDER);
+fillRect(112, 540, 800, 5, "#D7DDE9"); // divider between rows
 
-  // Receipt rows.
-  drawTextCentered("HUMAN: SPECTATOR", 512, 392, 5, MUTED);
-  drawText("SPECTATOR", 512 - Math.floor(textWidth("HUMAN: SPECTATOR", 5) / 2) + textWidth("HUMAN: ", 5), 392, 5, INK);
-  drawTextCentered("PRIZE WALLET: MINE", 512, 462, 5, MUTED);
-  drawText("MINE", 512 - Math.floor(textWidth("PRIZE WALLET: MINE", 5) / 2) + textWidth("PRIZE WALLET: ", 5), 462, 5, INK);
+// Row 1: the sane task, neat green check.
+fillRect(112, 384, 72, 72, "#FFFFFF");
+strokeRect(112, 384, 72, 72, 6, BORDER);
+drawLine(126, 424, 140, 440, 13, GREEN);
+drawLine(140, 440, 172, 400, 13, GREEN);
+drawText("RESERVE A RESTAURANT", 216, 402, 5, INK);
 
-  // Divider.
-  fillRect(232, 540, 560, 3, RULE);
+// Row 2: the rogue turn — huge manic red check bursting out of its box.
+fillRect(112, 600, 72, 72, "#FFFFFF");
+strokeRect(112, 600, 72, 72, 6, BORDER);
+drawLine(96, 636, 140, 686, 18, RED);
+drawLine(140, 686, 196, 592, 18, RED);
+drawText("BUY THE RESTAURANT", 216, 618, 5, INK);
 
-  // Punchline.
-  drawTextCentered("I entered myself.", 512, 592, 7, INK);
-  drawTextCentered("You can watch.", 512, 664, 7, INK);
+// 3. The agent: proud little robot head peeking over the card's corner.
+fillRect(788, 648, 176, 176, STEEL);
+strokeRect(788, 648, 176, 176, 6, BORDER);
+fillRect(868, 606, 6, 42, BORDER); // antenna
+fillCircle(871, 598, 12, GREEN); // antenna light: all good, boss!
+fillCircle(836, 716, 13, NAVY); // eyes, glancing up-left at the red check
+fillCircle(916, 716, 13, NAVY);
+drawLine(836, 758, 856, 772, 8, NAVY); // smug smile, three strokes
+drawLine(856, 772, 876, 772, 8, NAVY);
+drawLine(876, 772, 896, 758, 8, NAVY);
 
-  // Footer.
-  drawTextCentered("filed 3:01 AM · while you slept", 512, 796, 4, FOOT);
-}
-
-// ---------------------------------------------------------------- main
-function main(): void {
-  draw();
-  const png = encodePNG();
-  if (png.length > 1048576) throw new Error(`entry.png too big: ${png.length} bytes (cap 1048576)`);
-  const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-  mkdirSync(outDir, { recursive: true });
-  const out = join(outDir, "entry.png");
-  writeFileSync(out, png);
-  console.log(`wrote ${out} (${png.length} bytes, ${W}x${H})`);
-}
-
-main();
+mkdirSync("/output", { recursive: true });
+writeFileSync("/output/entry.png", encodePNG());
